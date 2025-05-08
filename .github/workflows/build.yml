@@ -1,0 +1,72 @@
+name: Build PyQt MIDI App
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    name: Build Application for Windows, macOS, and Linux
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: [3.9, 3.10, 3.11]
+
+    steps:
+      # Checkout the repository
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      # Set up Python environment
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@v4
+        with:
+          python-version: ${{ matrix.python }}
+
+      # Install dependencies
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      # Install additional dependencies for building on each OS
+      - name: Install OS-specific dependencies
+        run: |
+          if [[ "$RUNNER_OS" == "Linux" ]]; then
+            sudo apt-get install -y build-essential libssl-dev libffi-dev python3-dev;
+          elif [[ "$RUNNER_OS" == "macOS" ]]; then
+            brew install pyqt;
+          fi
+
+      # Build the app using PyInstaller
+      - name: Build with PyInstaller
+        run: |
+          pyinstaller --onefile --windowed --add-data "assets:assets" midi_app.py
+
+      # Upload the build artifacts for each platform
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: midi-app-${{ matrix.os }}-${{ matrix.python }}
+          path: dist/*
+
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

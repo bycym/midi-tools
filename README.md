@@ -1,6 +1,6 @@
 python3 -m venv ./
 source ./bin/activate
-python3 -m pip install mido
+python3 -m pip install -r requirements.txt
 brew install tcl-tk
 python3 midi.py
 
