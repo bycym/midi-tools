@@ -20,7 +20,7 @@ class MidiApp(QWidget):
         # --- GUI layout ---
         layout = QFormLayout()
 
-        self.note = QSpinBox(); self.note.setValue(61)  # C#4
+        self.note = QSpinBox(); self.note.setValue(37)  # C#4
         self.velocity = QSpinBox(); self.velocity.setRange(0, 127); self.velocity.setValue(100)
         self.bpm = QDoubleSpinBox(); self.bpm.setValue(60)
         self.duration = QDoubleSpinBox(); self.duration.setValue(2.0)
@@ -29,6 +29,9 @@ class MidiApp(QWidget):
         self.decay = QDoubleSpinBox(); self.decay.setValue(0.2)
         self.sustain = QSpinBox(); self.sustain.setRange(0, 127); self.sustain.setValue(70)
         self.release = QDoubleSpinBox(); self.release.setValue(0.5)
+        self.hold_beats = QDoubleSpinBox(); self.hold_beats.setValue(1.0)
+        
+
 
         layout.addRow("Note (MIDI)", self.note)
         layout.addRow("Velocity", self.velocity)
@@ -38,15 +41,27 @@ class MidiApp(QWidget):
         layout.addRow("Decay (s)", self.decay)
         layout.addRow("Sustain (0-127)", self.sustain)
         layout.addRow("Release (s)", self.release)
+        layout.addRow("Hold Beats", self.hold_beats)
 
         self.play_btn = QPushButton("Play Note")
         self.play_btn.clicked.connect(self.send_note)
         self.stop_btn = QPushButton("Send Note Off")
         self.stop_btn.clicked.connect(self.send_note_off)
+        # self.hold_btn = QPushButton("Hold Note (1 Beat)")
+        # self.hold_btn.clicked.connect(self.hold_note)
+
+
+        self.toggle_btn = QPushButton("Hold Note")
+        self.toggle_btn.setCheckable(True)  # Make it a toggle button
+        self.toggle_btn.clicked.connect(self.toggle_hold_note)
 
         button_layout = QHBoxLayout()
         button_layout.addWidget(self.play_btn)
+        # button_layout.addWidget(self.hold_btn)
         button_layout.addWidget(self.stop_btn)
+        button_layout.addWidget(self.toggle_btn)
+
+
 
         vlayout = QVBoxLayout()
         vlayout.addLayout(layout)
@@ -99,6 +114,34 @@ class MidiApp(QWidget):
         if self.last_note is not None:
             with mido.open_output(self.output_name) as outport:
                 outport.send(Message('note_off', note=self.last_note, velocity=0, channel=0))
+
+    def hold_note(self):
+        note = self.note.value()
+        velocity = self.velocity.value()
+        self.last_note = note
+        self.is_note_held = True  # Mark the note as held
+
+        with mido.open_output(self.output_name) as outport:
+            outport.send(Message('note_on', note=note, velocity=velocity, channel=0))
+
+    def stop_hold(self):
+        if self.is_note_held:
+            note = self.last_note
+            with mido.open_output(self.output_name) as outport:
+                outport.send(Message('note_off', note=note, velocity=0, channel=0))
+            self.is_note_held = False  # Reset the hold state
+
+
+    def toggle_hold_note(self):
+        if self.toggle_btn.isChecked():
+            # Send note_on when the button is checked (held state)
+            self.hold_note()
+            self.toggle_btn.setText("Stop Hold")  # Change button text to "Stop Hold"
+        else:
+            # Send note_off when the button is unchecked (released state)
+            self.stop_hold()
+            self.toggle_btn.setText("Hold Note")  # Change button text back to "Hold Note"
+
 
 
 if __name__ == "__main__":
