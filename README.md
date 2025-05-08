@@ -1,6 +1,7 @@
 python3 -m venv ./
 source ./bin/activate
 python3 -m pip install mido
+brew install tcl-tk
 python3 midi.py
 
 ## check midi in macos
