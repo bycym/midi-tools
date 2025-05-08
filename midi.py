@@ -6,7 +6,7 @@ import numpy as np
 import pyqtgraph as pg
 
 from PyQt5.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout,
+    QApplication, QHBoxLayout, QMainWindow, QSlider, QWidget, QVBoxLayout,
     QSpinBox, QComboBox, QPushButton, QStackedWidget, QLabel
 )
 from PyQt5.QtCore import Qt
@@ -39,31 +39,54 @@ class MidiTool(QMainWindow):
         self.adsr_view.setLayout(adsr_layout)
 
         self.plot_widget = pg.PlotWidget()
+        self.plot_widget.showAxis('bottom', False)
+        self.plot_widget.showAxis('left', False)
+        self.plot_widget.setBackground('#111')  # optional dark background
+        self.plot_widget.setMouseEnabled(x=False, y=False)
+        self.plot_widget.setMenuEnabled(False)
+        self.plot_widget.setContentsMargins(0, 0, 0, 0)
+        self.plot_widget.plotItem.vb.suggestPadding(0)
+
         adsr_layout.addWidget(self.plot_widget)
 
-        self.attack_input = QSpinBox()
-        self.attack_input.setValue(1000)
-        self.attack_input.valueChanged.connect(self.update_graph)
-        adsr_layout.addWidget(QLabel("Attack (ms)"))
-        adsr_layout.addWidget(self.attack_input)
+        # Slider layout
+        slider_layout = QHBoxLayout()
+        slider_wrapper = QWidget()
+        slider_wrapper.setMinimumHeight(150)  # Adjust this as needed
+        slider_wrapper.setLayout(slider_layout)
+        adsr_layout.addWidget(slider_wrapper)
 
-        self.decay_input = QSpinBox()
-        self.decay_input.setValue(500)
-        self.decay_input.valueChanged.connect(self.update_graph)
-        adsr_layout.addWidget(QLabel("Decay (ms)"))
-        adsr_layout.addWidget(self.decay_input)
+        # Attack slider
+        self.attack_slider = QSlider(Qt.Vertical)
+        self.attack_slider.setRange(0, 5000)
+        self.attack_slider.setValue(1000)
+        self.attack_slider.valueChanged.connect(self.update_graph)
+        self.style_slider(self.attack_slider, "#ff6600")  # orange for attack
+        slider_layout.addWidget(self._labeled_slider("Attack (ms)", self.attack_slider))
 
-        self.sustain_input = QSpinBox()
-        self.sustain_input.setValue(60)
-        self.sustain_input.valueChanged.connect(self.update_graph)
-        adsr_layout.addWidget(QLabel("Sustain (%)"))
-        adsr_layout.addWidget(self.sustain_input)
+        # Decay slider
+        self.decay_slider = QSlider(Qt.Vertical)
+        self.decay_slider.setRange(0, 5000)
+        self.decay_slider.setValue(500)
+        self.decay_slider.valueChanged.connect(self.update_graph)
+        self.style_slider(self.decay_slider, "#ffaa00")
+        slider_layout.addWidget(self._labeled_slider("Decay (ms)", self.decay_slider))
 
-        self.release_input = QSpinBox()
-        self.release_input.setValue(1500)
-        self.release_input.valueChanged.connect(self.update_graph)
-        adsr_layout.addWidget(QLabel("Release (ms)"))
-        adsr_layout.addWidget(self.release_input)
+        # Sustain slider
+        self.sustain_slider = QSlider(Qt.Vertical)
+        self.sustain_slider.setRange(0, 100)
+        self.sustain_slider.setValue(60)
+        self.sustain_slider.valueChanged.connect(self.update_graph)
+        self.style_slider(self.sustain_slider, "#33ccff")
+        slider_layout.addWidget(self._labeled_slider("Sustain (%)", self.sustain_slider))
+
+        # Release slider
+        self.release_slider = QSlider(Qt.Vertical)
+        self.release_slider.setRange(0, 5000)
+        self.release_slider.setValue(1500)
+        self.release_slider.valueChanged.connect(self.update_graph)
+        self.style_slider(self.release_slider, "#cc33ff")
+        slider_layout.addWidget(self._labeled_slider("Release (ms)", self.release_slider))
 
         self.arp_direction_dropdown = QComboBox()
         self.arp_direction_dropdown.addItems(["Up", "Down", "Up-Down"])
@@ -129,10 +152,10 @@ class MidiTool(QMainWindow):
             self.toggle_view_button.setText("Switch to Note Hold View")
 
     def update_graph(self):
-        a = self.attack_input.value() / 1000.0
-        d = self.decay_input.value() / 1000.0
-        s = self.sustain_input.value() / 100.0
-        r = self.release_input.value() / 1000.0
+        a = self.attack_slider.value() / 1000.0
+        d = self.decay_slider.value() / 1000.0
+        s = self.sustain_slider.value() / 100.0
+        r = self.release_slider.value() / 1000.0
 
         t = np.linspace(0, a + d + r, 500)
         y = []
@@ -202,6 +225,33 @@ class MidiTool(QMainWindow):
         except Exception as e:
             print("MIDI Error:", e)
 
+    def _labeled_slider(self, label_text, slider):
+        wrapper = QWidget()
+        v_layout = QVBoxLayout()
+        v_layout.addWidget(QLabel(label_text, alignment=Qt.AlignCenter))
+        v_layout.addWidget(slider)
+        wrapper.setLayout(v_layout)
+        return wrapper
+
+    def style_slider(self, slider, color="#00cc66"):
+        slider.setStyleSheet(f"""
+            QSlider::groove:vertical {{
+                border: 1px solid #444;
+                background: #222;
+                width: 8px;
+                border-radius: 4px;
+            }}
+            QSlider::handle:vertical {{
+                background: qlineargradient(
+                    x1: 0, y1: 0, x2: 1, y2: 1,
+                    stop: 0 {color}, stop: 1 #000
+                );
+                border: 1px solid #111;
+                height: 20px;
+                margin: -4px;
+                border-radius: 6px;
+            }}
+        """)
 
 
 if __name__ == '__main__':
