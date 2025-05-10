@@ -1,8 +1,24 @@
+## Prepare repository
+
+Create virtual env
+
+```shell
 python3 -m venv ./
 source ./bin/activate
+```
+
+Install packages
+
+```shell
 python3 -m pip install -r requirements.txt
 brew install tcl-tk
+```
+
+to run
+
+```shell
 python3 midi.py
+```
 
 ## check midi in macos
 
@@ -50,6 +66,12 @@ Do this:
 
 Then re-run the script above to confirm the IAC port appears.
 
-![alt text](image.png)
+![alt text](doc/image.png)
 
-![alt text](image-1.png)
+![alt text](doc/image-1.png)
+
+## Screenshots
+
+![alt text](doc/image-2.png)
+
+![alt text](doc/image-3.png)
