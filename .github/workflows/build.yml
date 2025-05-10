@@ -1,9 +1,9 @@
 name: Build PyQt MIDI App
 
 on:
-  push:
-    branches:
-      - main
+  # push:
+  #   branches:
+  #     # - main
   pull_request:
     branches:
       - main
