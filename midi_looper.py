@@ -169,6 +169,7 @@ class MidiLooper(QWidget):
 
 
     def _loop_play_thread(self):
+        loop_duration = self.recorded_messages[-1].time if self.recorded_messages else 1
         self.start_time = time.time()
         self.timer.start(100)
         while self.playing:
@@ -273,6 +274,20 @@ class MidiLooper(QWidget):
 
             mid.save(path)
             self.set_status(f"Saved to {path}", "gray")
+    def update_scroll(self):
+        if not self.playing or not self.recorded_messages:
+            self.track_bar.setValue(0)
+            return
+
+        loop_duration = self.recorded_messages[-1].time
+        if loop_duration == 0:
+            self.track_bar.setValue(0)
+            return
+
+        elapsed = (time.time() - self.start_time) % loop_duration
+        progress = int((elapsed / loop_duration) * 1000)
+        self.track_bar.setValue(progress)
+
 
 
 if __name__ == '__main__':
