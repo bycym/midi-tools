@@ -1,297 +1,238 @@
-import sys
-import time
-import threading
-from PyQt5.QtWidgets import (
-    QApplication, QWidget, QPushButton, QVBoxLayout,
-    QLabel, QSpinBox, QFileDialog, QProgressBar, QFrame
-)
-from PyQt5.QtMultimedia import QSound
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QPainter, QColor
-from mido import MidiFile, MidiTrack, Message, bpm2tempo
+import sys, time, os, threading
 import mido
-import rtmidi
+from mido import MidiFile, Message
+from PyQt5.QtCore import Qt, QTimer, QDir
+from PyQt5.QtGui import QColor, QPixmap, QPainter, QPen, QBrush
+from PyQt5.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QPushButton, QLabel, QGraphicsScene,
+    QGraphicsView, QGraphicsTextItem, QSpinBox, QHBoxLayout, QCheckBox,
+    QFileDialog, QTreeView, QFileSystemModel, QStackedWidget, QGraphicsRectItem
+)
 
-
-class StatusLED(QFrame):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.color = QColor("gray")
-        self.setFixedSize(30, 30)
-
-    def set_color(self, color_name):
-        self.color = QColor(color_name)
-        self.update()
-
-    def paintEvent(self, event):
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setBrush(self.color)
-        painter.setPen(Qt.NoPen)
-        radius = min(self.width(), self.height()) // 2
-        painter.drawEllipse(self.rect().center(), radius, radius)
-
-
-class MidiLooper(QWidget):
+class MidiLooperPlayerApp(QWidget):
     def __init__(self):
         super().__init__()
+        self.setWindowTitle("MIDI Looper & Player")
 
-        self.setWindowTitle("MIDI Looper")
-        self.bpm = 120
         self.recording = False
         self.playing = False
         self.overdubbing = False
+        self.playing_midi_file = False
+        self.bpm = 120
         self.recorded_messages = []
-        self.start_time = None
+        self.midi_player_messages = []
+
+        self.outport = mido.open_output()  # Global MIDI on macOS
 
         self.init_ui()
-        self.init_midi()
+        self.init_timer()
 
     def init_ui(self):
+        main_layout = QVBoxLayout()
+
+        self.toggle_view_btn = QPushButton("Switch to File Browser")
+        self.toggle_view_btn.setCheckable(True)
+        self.toggle_view_btn.clicked.connect(self.toggle_view)
+        main_layout.addWidget(self.toggle_view_btn)
+
+        self.stack = QStackedWidget()
+        self.init_looper_view()
+        self.init_file_browser_view()
+        self.stack.addWidget(self.looper_view)
+        self.stack.addWidget(self.file_browser_view)
+        main_layout.addWidget(self.stack)
+
+        self.setLayout(main_layout)
+
+    def init_looper_view(self):
+        self.looper_view = QWidget()
         layout = QVBoxLayout()
 
-        self.led = StatusLED()
-        self.bpm_label = QLabel("BPM:")
-        self.bpm_spin = QSpinBox()
-        self.bpm_spin.setRange(40, 300)
-        self.bpm_spin.setValue(120)
-        self.bpm_spin.valueChanged.connect(self.update_bpm)
-
-        self.status = QLabel("Status: Idle")
-
-        self.track_bar = QProgressBar()
-        self.track_bar.setMinimum(0)
-        self.track_bar.setMaximum(1000)
-        self.track_bar.setValue(0)
-        self.track_bar.setTextVisible(False)
-
-        self.timer = QTimer()
-        self.timer.timeout.connect(self.update_progress)
-
         self.record_btn = QPushButton("Record")
-        self.record_btn.clicked.connect(self.record)
-
         self.play_btn = QPushButton("Play")
-        self.play_btn.clicked.connect(self.play)
-
         self.overdub_btn = QPushButton("Overdub")
-        self.overdub_btn.clicked.connect(self.overdub)
-
         self.stop_btn = QPushButton("Stop")
+
+        self.record_btn.clicked.connect(self.toggle_recording)
+        self.play_btn.clicked.connect(self.toggle_playback)
+        self.overdub_btn.clicked.connect(self.toggle_overdub)
         self.stop_btn.clicked.connect(self.stop)
 
-        self.save_btn = QPushButton("Save")
-        self.save_btn.clicked.connect(self.save)
-
-        self.record_loop_btn = QPushButton("Record & Loop")
-        self.record_loop_btn.clicked.connect(lambda: self.record(auto_play=True))
-
-        layout.addWidget(self.led)
-        layout.addWidget(self.bpm_label)
-        layout.addWidget(self.bpm_spin)
-        layout.addWidget(self.status)
-        layout.addWidget(self.track_bar)
         layout.addWidget(self.record_btn)
         layout.addWidget(self.play_btn)
         layout.addWidget(self.overdub_btn)
         layout.addWidget(self.stop_btn)
-        layout.addWidget(self.save_btn)
-        layout.addWidget(self.record_loop_btn)
 
-        self.setLayout(layout)
+        self.looper_led = QLabel("Looper")
+        self.player_led = QLabel("Player")
+        self.set_led(self.looper_led, "gray")
+        self.set_led(self.player_led, "gray")
 
-    def update_bpm(self, value):
-        self.bpm = value
+        looper_controls = QHBoxLayout()
+        looper_controls.addWidget(self.looper_led)
+        self.looper_mute = QCheckBox("Mute Looper")
+        looper_controls.addWidget(self.looper_mute)
 
-    def set_status(self, text, color=None):
-        self.status.setText(f"Status: {text}")
-        if color:
-            self.led.set_color(color)
+        player_controls = QHBoxLayout()
+        player_controls.addWidget(self.player_led)
+        self.player_mute = QCheckBox("Mute Player")
+        player_controls.addWidget(self.player_mute)
 
-    def update_progress(self):
-        if self.recording or self.playing or self.overdubbing:
-            elapsed = time.time() - self.start_time
-            progress_value = int((elapsed % 10) * 100)  # wrap every 10s
-            self.track_bar.setValue(progress_value)
+        layout.addLayout(looper_controls)
+        layout.addLayout(player_controls)
 
-    def init_midi(self):
-        available_outputs = mido.get_output_names()
-        print("Available MIDI outputs:", available_outputs)
+        self.looper_channel_spin = QSpinBox()
+        self.looper_channel_spin.setRange(0, 15)
+        self.looper_channel_spin.setPrefix("Looper Ch: ")
+        layout.addWidget(self.looper_channel_spin)
 
-        # Use IAC Bus if available
-        iac_port = next((port for port in available_outputs if "IAC" in port), None)
-        if iac_port:
-            self.outport = mido.open_output(iac_port)
-            self.set_status(f"Using IAC: {iac_port}", "gray")
+        self.piano_roll_scene = QGraphicsScene()
+        self.piano_roll_view = QGraphicsView(self.piano_roll_scene)
+        layout.addWidget(self.piano_roll_view)
+
+        self.waveform_scene = QGraphicsScene()
+        self.waveform_view = QGraphicsView(self.waveform_scene)
+        layout.addWidget(self.waveform_view)
+
+        self.looper_view.setLayout(layout)
+
+    def init_file_browser_view(self):
+        self.file_browser_view = QWidget()
+        layout = QVBoxLayout()
+
+        self.add_folder_btn = QPushButton("Add Folder")
+        self.add_folder_btn.clicked.connect(self.add_folder)
+        layout.addWidget(self.add_folder_btn)
+
+        self.model = QFileSystemModel()
+        self.model.setNameFilters(["*.mid", "*.midi"])
+        self.model.setNameFilterDisables(False)
+
+        self.tree = QTreeView()
+        self.tree.setModel(self.model)
+        self.tree.clicked.connect(self.play_selected_midi)
+        layout.addWidget(self.tree)
+
+        self.player_channel_spin = QSpinBox()
+        self.player_channel_spin.setRange(0, 15)
+        self.player_channel_spin.setPrefix("Player Ch: ")
+        layout.addWidget(self.player_channel_spin)
+
+        self.file_browser_view.setLayout(layout)
+
+    def toggle_view(self):
+        if self.toggle_view_btn.isChecked():
+            self.toggle_view_btn.setText("Switch to Looper")
+            self.stack.setCurrentWidget(self.file_browser_view)
         else:
-            self.outport = mido.open_output()  # fallback
-            self.set_status("Default MIDI Output", "gray")
+            self.toggle_view_btn.setText("Switch to File Browser")
+            self.stack.setCurrentWidget(self.looper_view)
 
-        self.inport = mido.open_input()  # optional: also route in from IAC or hardware
+    def set_led(self, label, color):
+        size = 14
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setBrush(QColor(color))
+        painter.setPen(Qt.NoPen)
+        painter.drawEllipse(0, 0, size, size)
+        painter.end()
+        label.setPixmap(pixmap)
 
-
-    def play_pre_count(self):
-        beat_interval = 60 / self.bpm
-        for _ in range(4):
-            # Replace this path with a real sound file if available
-            # QSound.play("count.wav")
-            print("Beep")  # Replace with actual sound
-            time.sleep(beat_interval)
-
-    def record(self, auto_play=False):
-        self.stop()
-        self.set_status("Pre-counting...", "gray")
-        threading.Thread(target=self._record_thread, args=(auto_play,)).start()
-
-
-    def _record_thread(self, auto_play):
-        self.play_pre_count()
-        self.set_status("Recording...", "red")
-        self.recording = True
-        self.start_time = time.time()
+    def toggle_recording(self):
+        self.recording = not self.recording
         self.recorded_messages = []
-        self.timer.start(100)
+        self.set_led(self.looper_led, "red" if self.recording else "gray")
 
-        while self.recording:
-            for msg in self.inport.iter_pending():
-                if not msg.is_meta:
-                    msg.time = time.time() - self.start_time
-                    print(msg)
-                    self.recorded_messages.append(msg)
-
-        self.timer.stop()
-        if auto_play and self.recorded_messages:
-            self.set_status("Looping playback...", "green")
-            self.playing = True
-            threading.Thread(target=self._loop_play_thread).start()
+    def toggle_playback(self):
+        if self.playing:
+            self.playing = False
+            self.set_led(self.looper_led, "gray")
         else:
-            self.set_status("Idle", "gray")
+            self.playing = True
+            self.set_led(self.looper_led, "green")
+            threading.Thread(target=self.play_loop).start()
 
-
-    def _loop_play_thread(self):
-        loop_duration = self.recorded_messages[-1].time if self.recorded_messages else 1
-        self.start_time = time.time()
-        self.timer.start(100)
-        while self.playing:
-            start_time = time.time()
-            for msg in self.recorded_messages:
-                if not self.playing:
-                    self.timer.stop()
-                    return
-                time.sleep(max(0, msg.time - (time.time() - start_time)))
-                self.outport.send(msg)
-
-
-    def play(self):
-        if not self.recorded_messages:
-            self.set_status("Nothing to play", "gray")
-            return
-
-        self.stop()
-        self.set_status("Looping playback...", "green")
-        self.playing = True
-        threading.Thread(target=self._loop_play_thread).start()
-
-
-    def _play_thread(self):
-        if not self.recorded_messages:
-            self.set_status("Nothing to play", "gray")
-            return
-
-        self.start_time = time.time()
-        self.timer.start(100)
-        start_time = time.time()
-
-        for msg in self.recorded_messages:
-            print(msg)
-            if not self.playing:
-                break
-            time.sleep(max(0, msg.time - (time.time() - start_time)))
-            self.outport.send(msg)
-
-        self.timer.stop()
-        self.set_status("Idle", "gray")
-        self.playing = False
-
-    def overdub(self):
-        if not self.recorded_messages:
-            self.set_status("Record something first", "gray")
-            return
-        self.stop()
-        self.set_status("Overdubbing...", "yellow")
-        threading.Thread(target=self._overdub_thread).start()
-
-    def _overdub_thread(self):
-        self.playing = True
-        self.recording = True
-        self.overdubbing = True
-        self.start_time = time.time()
-        self.timer.start(100)
-
-        base_messages = list(self.recorded_messages)
-        overdub_messages = []
-
-        threading.Thread(target=self._play_thread).start()
-
-        while self.recording:
-            for msg in self.inport.iter_pending():
-                if not msg.is_meta:
-                    msg.time = time.time() - self.start_time
-                    print(msg)
-                    overdub_messages.append(msg)
-
-        self.recorded_messages = base_messages + overdub_messages
-        self.overdubbing = False
-        self.timer.stop()
-        self.set_status("Overdub complete", "gray")
+    def toggle_overdub(self):
+        self.overdubbing = not self.overdubbing
+        self.set_led(self.looper_led, "yellow" if self.overdubbing else "green")
 
     def stop(self):
-        self.recording = False
         self.playing = False
+        self.recording = False
         self.overdubbing = False
-        self.set_status("Stopped", "gray")
-        self.timer.stop()
+        self.playing_midi_file = False
+        self.set_led(self.looper_led, "gray")
+        self.set_led(self.player_led, "gray")
 
-
-    def save(self):
-        if not self.recorded_messages:
-            self.set_status("Nothing to save", "gray")
-            return
-
-        path, _ = QFileDialog.getSaveFileName(self, "Save MIDI", "", "MIDI files (*.mid)")
-        if path:
-            mid = MidiFile()
-            track = MidiTrack()
-            mid.tracks.append(track)
-
-            prev_time = 0
+    def play_loop(self):
+        while self.playing:
+            start = time.time()
             for msg in self.recorded_messages:
-                delta = int((msg.time - prev_time) * mido.second2tick(
-                    1, ticks_per_beat=480, tempo=bpm2tempo(self.bpm)))
-                prev_time = msg.time
-                msg.time = delta
-                track.append(msg)
+                if not self.playing:
+                    return
+                time.sleep(max(0, msg.time - (time.time() - start)))
+                if not self.looper_mute.isChecked():
+                    msg.channel = self.looper_channel_spin.value()
+                    self.outport.send(msg)
 
-            mid.save(path)
-            self.set_status(f"Saved to {path}", "gray")
-    def update_scroll(self):
-        if not self.playing or not self.recorded_messages:
-            self.track_bar.setValue(0)
-            return
+    def add_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select MIDI Folder")
+        if folder:
+            self.model.setRootPath(folder)
+            self.tree.setRootIndex(self.model.index(folder))
 
-        loop_duration = self.recorded_messages[-1].time
-        if loop_duration == 0:
-            self.track_bar.setValue(0)
-            return
+    def play_selected_midi(self, index):
+        file_path = self.model.filePath(index)
+        if os.path.isfile(file_path):
+            mid = MidiFile(file_path)
+            self.midi_player_messages = [msg for msg in mid if not msg.is_meta]
+            self.playing_midi_file = True
+            self.set_led(self.player_led, "green")
+            threading.Thread(target=self._loop_play_midi_file).start()
 
-        elapsed = (time.time() - self.start_time) % loop_duration
-        progress = int((elapsed / loop_duration) * 1000)
-        self.track_bar.setValue(progress)
+    def _loop_play_midi_file(self):
+        while self.playing_midi_file:
+            start = time.time()
+            for msg in self.midi_player_messages:
+                if not self.playing_midi_file:
+                    return
+                time.sleep(max(0, msg.time - (time.time() - start)))
+                if not self.player_mute.isChecked():
+                    msg.channel = self.player_channel_spin.value()
+                    self.outport.send(msg)
 
+    def init_timer(self):
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_visuals)
+        self.timer.start(100)
 
+    def update_visuals(self):
+        self.draw_piano_roll()
+        self.draw_waveform()
 
-if __name__ == '__main__':
+    def draw_piano_roll(self):
+        self.piano_roll_scene.clear()
+        for i in range(60, 72):
+            color = Qt.white if i % 12 not in [1, 3, 6, 8, 10] else Qt.black
+            self.piano_roll_scene.addRect((i - 60) * 20, 0, 20, 60, QPen(Qt.black), QBrush(color))
+        for i, msg in enumerate(self.recorded_messages):
+            if msg.type == "note_on":
+                x = i * 20
+                y = 60 - (msg.note - 60) * 2
+                self.piano_roll_scene.addRect(x, y, 10, 10, QPen(Qt.black), QBrush(Qt.blue))
+
+    def draw_waveform(self):
+        self.waveform_scene.clear()
+        x = 0
+        for msg in self.recorded_messages:
+            if msg.type == "note_on":
+                self.waveform_scene.addRect(x, 50, 5, 30, QPen(Qt.black), QBrush(Qt.green))
+                x += 10
+
+if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = MidiLooper()
+    window = MidiLooperPlayerApp()
+    window.resize(800, 600)
     window.show()
     sys.exit(app.exec_())
