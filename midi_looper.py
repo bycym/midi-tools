@@ -38,6 +38,7 @@ class MidiLooperPlayerApp(QWidget):
     def __init__(self):
         super().__init__()
 
+        self.setAcceptDrops(True)
         self.led = StatusLED()
         self.status = QLabel("Status: Idle")
 
@@ -336,6 +337,28 @@ class MidiLooperPlayerApp(QWidget):
             file_path = url.toLocalFile()
             if file_path.lower().endswith(('.mid', '.midi')):
                 self.load_and_play_midi(file_path)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        for url in event.mimeData().urls():
+            file_path = url.toLocalFile()
+            if file_path.lower().endswith(('.mid', '.midi')):
+                self.load_and_play_midi(file_path)
+
+    def load_and_play_midi(self, file_path):
+        try:
+            mid = mido.MidiFile(file_path)
+            self.midi_player_messages = [msg for msg in mid if not msg.is_meta]
+            self.playing_midi_file = True
+            self.set_led(self.player_led, "green")
+            threading.Thread(target=self._loop_play_midi_file).start()
+        except Exception as e:
+            print(f"Error loading MIDI: {e}")
+
+    
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
