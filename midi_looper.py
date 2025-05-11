@@ -1,4 +1,4 @@
-from PyQt5.QtCore import QSettings
+from PyQt5.QtCore import QSettings, QThread, pyqtSignal
 
 import sys
 import os
@@ -8,7 +8,7 @@ import mido
 from mido import MidiFile, MidiTrack, Message, bpm2tempo
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QLabel,
-    QFileDialog, QTreeView, QFileSystemModel, QSpinBox, QStackedWidget, QProgressBar, QFrame
+    QFileDialog, QTreeView, QFileSystemModel, QSpinBox, QStackedWidget, QProgressBar, QFrame, QListWidget
 )
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QPainter, QColor
@@ -22,16 +22,37 @@ class StatusLED(QFrame):
         self.setFixedSize(30, 30)
 
     def set_color(self, color_name):
-        self.color = QColor(color_name)
-        self.update()
+        if self.color.name() != QColor(color_name).name():  # Only update if the color changes
+            self.color = QColor(color_name)
+            self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setBrush(self.color)
-        painter.setPen(Qt.NoPen)
-        radius = min(self.width(), self.height()) // 2
-        painter.drawEllipse(self.rect().center(), radius, radius)
+        try:
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setBrush(self.color)
+            painter.setPen(Qt.NoPen)
+            radius = min(self.width(), self.height()) // 2
+            painter.drawEllipse(self.rect().center(), radius, radius)
+        finally:
+            painter.end()  # Ensure the painter is properly ended
+
+
+class MidiLoaderThread(QThread):
+    midi_loaded = pyqtSignal(list)  # Signal to send loaded MIDI messages
+
+    def __init__(self, file_path):
+        super().__init__()
+        self.file_path = file_path
+
+    def run(self):
+        try:
+            mid = mido.MidiFile(self.file_path)
+            messages = [msg for msg in mid if not msg.is_meta]
+            self.midi_loaded.emit(messages)
+        except Exception as e:
+            print(f"Error loading MIDI: {e}")
+            self.midi_loaded.emit([])  # Emit an empty list on error
 
 
 class MidiLooperPlayerApp(QWidget):
@@ -135,7 +156,10 @@ class MidiLooperPlayerApp(QWidget):
         self.looper_view.setLayout(layout)
 
     def setup_file_browser_view(self):
-        layout = QVBoxLayout()
+        layout = QHBoxLayout()  # Change to QHBoxLayout to place widgets side by side
+
+        # Left side: File browser
+        file_browser_layout = QVBoxLayout()
 
         self.add_folder_btn = QPushButton("Add Folder")
         self.add_folder_btn.clicked.connect(self.add_folder)
@@ -159,12 +183,19 @@ class MidiLooperPlayerApp(QWidget):
         self.player_led = QLabel("●")
         self.set_led(self.player_led, "gray")
 
-        layout.addWidget(self.add_folder_btn)
-        layout.addWidget(self.tree)
-        layout.addWidget(self.player_channel_spin)
-        layout.addWidget(self.player_progress)
-        layout.addWidget(self.player_stop_btn)
-        layout.addWidget(self.player_led)
+        file_browser_layout.addWidget(self.add_folder_btn)
+        file_browser_layout.addWidget(self.tree)
+        file_browser_layout.addWidget(self.player_channel_spin)
+        file_browser_layout.addWidget(self.player_progress)
+        file_browser_layout.addWidget(self.player_stop_btn)
+        file_browser_layout.addWidget(self.player_led)
+
+        # Right side: Note list
+        self.note_list = QListWidget()
+
+        # Add both layouts to the main layout
+        layout.addLayout(file_browser_layout)
+        layout.addWidget(self.note_list)
 
         self.file_browser_view.setLayout(layout)
 
@@ -301,10 +332,35 @@ class MidiLooperPlayerApp(QWidget):
             self.load_and_play_midi(file_path)
 
     def load_and_play_midi(self, file_path):
-        mid = MidiFile(file_path)
-        self.midi_player_messages = [msg for msg in mid if not msg.is_meta]
+        # Stop the currently playing MIDI file, if any
+        self.stop_midi_file()
+
+        # Set status and clear the note list
+        self.set_status("Loading MIDI file...", "gray")
+        self.note_list.clear()
+
+        # Create and start the loader thread
+        self.loader_thread = MidiLoaderThread(file_path)
+        self.loader_thread.midi_loaded.connect(self.on_midi_loaded)
+        self.loader_thread.start()
+
+    def on_midi_loaded(self, messages):
+        self.midi_player_messages = messages
+        if not messages:
+            self.set_status("Failed to load MIDI file", "red")
+            return
+
         self.playing_midi_file = True
         self.set_led(self.player_led, "green")
+        self.set_status("MIDI file loaded", "green")
+
+        # Populate the note list
+        self.note_list.clear()
+        for msg in self.midi_player_messages:
+            if msg.type == 'note_on':
+                self.note_list.addItem(f"Note: {msg.note}, Velocity: {msg.velocity}, Time: {msg.time}")
+
+        # Start playback in a separate thread
         threading.Thread(target=self._loop_play_midi_file).start()
 
     def _loop_play_midi_file(self):
@@ -347,16 +403,6 @@ class MidiLooperPlayerApp(QWidget):
             file_path = url.toLocalFile()
             if file_path.lower().endswith(('.mid', '.midi')):
                 self.load_and_play_midi(file_path)
-
-    def load_and_play_midi(self, file_path):
-        try:
-            mid = mido.MidiFile(file_path)
-            self.midi_player_messages = [msg for msg in mid if not msg.is_meta]
-            self.playing_midi_file = True
-            self.set_led(self.player_led, "green")
-            threading.Thread(target=self._loop_play_midi_file).start()
-        except Exception as e:
-            print(f"Error loading MIDI: {e}")
 
     
 
