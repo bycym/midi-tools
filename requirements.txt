@@ -2,3 +2,4 @@ mido
 python-rtmidi
 PyQt5
 pyqtgraph
+simpleaudio

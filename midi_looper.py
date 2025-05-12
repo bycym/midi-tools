@@ -14,7 +14,7 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QPainter, QColor
 # import rtmidih
 import simpleaudio as sa  # For playing .wav files
-
+from ui.potmeter_widget import Potmeter
 
 class StatusLED(QFrame):
     def __init__(self, parent=None):
@@ -272,6 +272,16 @@ class MidiLooperPlayerApp(QWidget):
     def setup_file_browser_view(self):
         layout = QHBoxLayout()  # Change to QHBoxLayout to place widgets side by side
 
+        # Set bpm for file
+        file_bpm_layout = QHBoxLayout()
+        file_bpm_label = QLabel("BPM:")
+        self.file_bpm = 120
+        self.file_bpm_spin = QSpinBox()
+        self.bpm_spin.setRange(40, 300)
+        self.bpm_spin.setValue(self.file_bpm)  # Default BPM
+        file_bpm_layout.addWidget(file_bpm_label)
+        file_bpm_layout.addWidget(self.file_bpm_spin)
+
         # Left side: File browser
         file_browser_layout = QVBoxLayout()
 
@@ -297,12 +307,20 @@ class MidiLooperPlayerApp(QWidget):
         self.player_led = QLabel("●")
         self.set_led(self.player_led, "gray")
 
+        # Add a potmeter for setting a parameter
+        self.potmeter_label = QLabel("Parameter: 50")
+        self.potmeter = Potmeter(min_value=0, max_value=360, initial_value=50)
+        self.potmeter.valueChanged.connect(self.update_potmeter_label)
+
         file_browser_layout.addWidget(self.add_folder_btn)
         file_browser_layout.addWidget(self.tree)
         file_browser_layout.addWidget(self.player_channel_spin)
         file_browser_layout.addWidget(self.player_progress)
         file_browser_layout.addWidget(self.player_stop_btn)
         file_browser_layout.addWidget(self.player_led)
+        file_browser_layout.addLayout(file_bpm_layout)
+        file_browser_layout.addWidget(self.file_bpm_spin)
+        # file_browser_layout.addWidget(self.potmeter)
 
         # Right side: Note list
         self.note_list = QListWidget()
@@ -310,13 +328,16 @@ class MidiLooperPlayerApp(QWidget):
         # Add both layouts to the main layout
         layout.addLayout(file_browser_layout)
         layout.addWidget(self.note_list)
-
+        
         self.file_browser_view.setLayout(layout)
 
         last_folder = self.settings.value("lastMidiFolder")
         if last_folder and os.path.isdir(last_folder):
             self.model.setRootPath(last_folder)
             self.tree.setRootIndex(self.model.index(last_folder))
+
+    def update_potmeter_label(self, value):
+        self.potmeter_label.setText(f"Parameter: {value}")
 
     def set_status(self, text, color=None):
         self.status.setText(f"Status: {text}")
@@ -408,6 +429,7 @@ class MidiLooperPlayerApp(QWidget):
         self.is_playing = False
         self.is_overdubbing = False
         self.timer.stop()
+        self.panic()
         self.track_progress.setValue(0)
         self.set_led(self.looper_led, "gray")
         self.set_status("Stop", "gray")
