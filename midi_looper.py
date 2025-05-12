@@ -1,4 +1,4 @@
-from PyQt5.QtCore import QSettings, QThread, pyqtSignal
+from PyQt5.QtCore import QSettings, QThread, pyqtSignal, QMetaObject, Qt
 
 import sys
 import os
@@ -89,6 +89,7 @@ class MidiLooperPlayerApp(QWidget):
         self.init_ui()
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_progress)
+        self.active_notes = set()  # Set to keep track of active notes
 
     def init_ui(self):
         self.stack = QStackedWidget()
@@ -177,11 +178,29 @@ class MidiLooperPlayerApp(QWidget):
         self.num_buttons_input.setPlaceholderText("Enter number of buttons")
         self.num_buttons_input.returnPressed.connect(self.adjust_button_grid)
 
+        # Keyboard input toggle
+        self.keyboard_input_btn = QPushButton("Enable Keyboard Input")
+        self.keyboard_input_btn.setCheckable(True)
+        self.keyboard_input_btn.toggled.connect(self.toggle_keyboard_input)
+
+        # Configurable start note
+        start_note_layout = QHBoxLayout()
+        start_note_label = QLabel("Start Note:")
+        self.start_note_spin = QSpinBox()
+        self.start_note_spin.setRange(0, 127)  # MIDI note range
+        self.start_note_spin.setValue(60)  # Default to C4
+        start_note_layout.addWidget(start_note_label)
+        start_note_layout.addWidget(self.start_note_spin)
+
+
+
         # Add widgets to the main layout
         layout.addWidget(self.led)
         layout.addLayout(bpm_layout)
         layout.addWidget(self.bpm_spin)
         layout.addWidget(self.track_progress)
+        layout.addWidget(self.keyboard_input_btn)
+        layout.addLayout(start_note_layout)
         layout.addLayout(controls_layout)  
         # layout.addWidget(self.record_btn)
         layout.addWidget(self.record_loop_btn)
@@ -497,10 +516,10 @@ class MidiLooperPlayerApp(QWidget):
             # Update the progress bar
             elapsed_time = time.time() - start_time
             progress = int((elapsed_time / total_duration) * 100)
-            self.player_progress.setValue(progress)
+            self.set_progress_value(progress)
 
         # Reset the progress bar when playback is complete
-        self.player_progress.setValue(0)
+        self.set_progress_value(0)
 
     def stop_midi_file(self):
         self.playing_midi_file = False
@@ -508,17 +527,10 @@ class MidiLooperPlayerApp(QWidget):
         self.set_led(self.player_led, "gray")
 
     def set_led(self, label, color):
-        label.setStyleSheet(f"color: {color}; font-size: 24px")
-
-    def dragEnterEvent(self, event):
-        if event.mimeData().hasUrls():
-            event.acceptProposedAction()
-
-    def dropEvent(self, event):
-        for url in event.mimeData().urls():
-            file_path = url.toLocalFile()
-            if file_path.lower().endswith(('.mid', '.midi')):
-                self.load_and_play_midi(file_path)
+        try:
+            label.setStyleSheet(f"color: {color}; font-size: 24px")
+        except Exception as e:
+                print(f"Error setting set_led: {e}")
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -555,6 +567,67 @@ class MidiLooperPlayerApp(QWidget):
 
         # When the current file finishes, play the next one
         self.play_next_in_queue()
+
+    def set_progress_value(self, value):
+        """Thread-safe method to update the progress bar."""
+        # return;
+        try:
+            QMetaObject.invokeMethod(self.player_progress, "setValue", Qt.QueuedConnection, value)
+            # self.player_progress.setValue(value)
+        except Exception as e:
+                print(f"Error set_progress_value: {e}")
+
+    def keyPressEvent(self, event):
+        if not self.keyboard_input_btn.isChecked():
+            return  # Ignore if keyboard input is disabled
+
+        key = event.key()
+        note = self.map_key_to_midi(key)
+        if note is not None and note not in self.active_notes:
+            print(f"Key pressed: {key}, mapped to note: {note}")
+            self.active_notes.add(note)
+            self.outport.send(Message('note_on', note=note, velocity=64))
+
+    def keyReleaseEvent(self, event):
+        if not self.keyboard_input_btn.isChecked():
+            return  # Ignore if keyboard input is disabled
+
+        key = event.key()
+        note = self.map_key_to_midi(key)
+        if note is not None and note in self.active_notes:
+            self.active_notes.remove(note)
+            self.outport.send(Message('note_off', note=note, velocity=64))
+
+    def map_key_to_midi(self, key):
+        """Map keyboard keys to MIDI notes."""
+        key_map = {
+            Qt.Key_Z: 0,  # C
+            Qt.Key_S: 1,  # C#
+            Qt.Key_X: 2,  # D
+            Qt.Key_D: 3,  # D#
+            Qt.Key_C: 4,  # E
+            Qt.Key_V: 5,  # F
+            Qt.Key_G: 6,  # F#
+            Qt.Key_B: 7,  # G
+            Qt.Key_H: 8,  # G#
+            Qt.Key_N: 9,  # A
+            Qt.Key_J: 10, # A#
+            Qt.Key_M: 11, # B
+            Qt.Key_Comma: 12,  # C (next octave)
+        }
+
+        if key in key_map:
+            start_note = self.start_note_spin.value()
+            return start_note + key_map[key]
+        return None
+
+    def toggle_keyboard_input(self, enabled):
+        if enabled:
+            self.keyboard_input_btn.setText("Disable Keyboard Input")
+            self.set_status("Keyboard input enabled", "green")
+        else:
+            self.keyboard_input_btn.setText("Enable Keyboard Input")
+            self.set_status("Keyboard input disabled", "gray")
 
 def midi_note_to_name(note_number):
     """Convert MIDI note number to note name."""
