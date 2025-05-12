@@ -479,6 +479,7 @@ class MidiLooperPlayerApp(QWidget):
         self.set_status("MIDI file loaded", "green")
 
         # Populate the note list
+        self.panic()
         self.note_list.clear()
         for msg in self.midi_player_messages:
             if msg.type == 'note_on':
@@ -498,32 +499,47 @@ class MidiLooperPlayerApp(QWidget):
         total_ticks = sum(msg.time for msg in self.midi_player_messages)
         total_duration = mido.tick2second(total_ticks, ticks_per_beat, tempo)
 
-        start_time = time.time()
-        elapsed_time = 0
+        # start_time = time.time()
+        # elapsed_time = 0
 
-        for msg in self.midi_player_messages:
-            if not self.playing_midi_file:
-                break
+        # while self.playing_midi_file:
+        #     start_time = time.time()
+        #     elapsed_time = 0
+        #     for msg in self.midi_player_messages:
+        #         if not self.playing_midi_file:
+        #             break
 
-            # Calculate the time to wait for the next message
-            wait_time = mido.tick2second(msg.time, ticks_per_beat, tempo)
-            time.sleep(wait_time)
+        #         # Calculate the time to wait for the next message
+        #         wait_time = mido.tick2second(msg.time, ticks_per_beat, tempo)
+        #         time.sleep(wait_time)
 
-            # Send the MIDI message
-            msg.channel = self.player_channel_spin.value()
-            self.outport.send(msg)
+        #         # Send the MIDI message
+        #         msg.channel = self.player_channel_spin.value()
+        #         self.outport.send(msg)
 
-            # Update the progress bar
-            elapsed_time = time.time() - start_time
-            progress = int((elapsed_time / total_duration) * 100)
-            self.set_progress_value(progress)
+        #         # Update the progress bar
+        #         elapsed_time = time.time() - start_time
+        #         progress = int((elapsed_time / total_duration) * 100)
+        #         self.set_progress_value(progress)
 
-        # Reset the progress bar when playback is complete
-        self.set_progress_value(0)
+        #     # Reset the progress bar when playback is complete
+        #     self.set_progress_value(0)
+        while self.playing_midi_file:
+            start = time.time()
+            for msg in self.midi_player_messages:
+                if not self.playing_midi_file:
+                    return
+                time.sleep(max(0, msg.time - (time.time() - start)))
+                msg.channel = self.player_channel_spin.value()
+                self.outport.send(msg)
+            self.set_progress_value(100)
+            time.sleep(0.1)
+            self.set_progress_value(0)
 
     def stop_midi_file(self):
         self.playing_midi_file = False
-        self.player_progress.setValue(0)
+        self.panic()
+        self.set_progress_value(0)
         self.set_led(self.player_led, "gray")
 
     def set_led(self, label, color):
@@ -570,7 +586,7 @@ class MidiLooperPlayerApp(QWidget):
 
     def set_progress_value(self, value):
         """Thread-safe method to update the progress bar."""
-        # return;
+        return;
         try:
             QMetaObject.invokeMethod(self.player_progress, "setValue", Qt.QueuedConnection, value)
             # self.player_progress.setValue(value)
