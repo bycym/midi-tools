@@ -8,11 +8,12 @@ import mido
 from mido import MidiFile, MidiTrack, Message, bpm2tempo
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QPushButton, QVBoxLayout, QHBoxLayout, QLabel,
-    QFileDialog, QTreeView, QFileSystemModel, QSpinBox, QStackedWidget, QProgressBar, QFrame, QListWidget
+    QFileDialog, QTreeView, QFileSystemModel, QSpinBox, QStackedWidget, QProgressBar, QFrame, QListWidget, QGridLayout, QLineEdit
 )
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QPainter, QColor
-import rtmidi
+# import rtmidih
+import simpleaudio as sa  # For playing .wav files
 
 
 class StatusLED(QFrame):
@@ -23,10 +24,15 @@ class StatusLED(QFrame):
 
     def set_color(self, color_name):
         if self.color.name() != QColor(color_name).name():  # Only update if the color changes
-            self.color = QColor(color_name)
-            self.update()
+            try:
+                self.color = QColor(color_name)
+                self.update()
+            except Exception as e:
+                print(f"Error setting color: {e}")
+            
 
     def paintEvent(self, event):
+        print("paintEvent called")
         painter = QPainter(self)
         try:
             painter.setRenderHint(QPainter.Antialiasing)
@@ -77,6 +83,9 @@ class MidiLooperPlayerApp(QWidget):
         self.midi_player_channel = 0
         self.looper_channel = 0
         self.settings = QSettings("MyCompany", "MidiLooperApp")
+        self.wav_cache = {}  # Cache for loaded .wav files
+        self.button_grid = None
+        self.num_buttons = 16  # Default number of buttons
         self.init_ui()
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_progress)
@@ -103,31 +112,50 @@ class MidiLooperPlayerApp(QWidget):
     def setup_looper_view(self):
         layout = QVBoxLayout()
 
+        # BPM label and selector in one row
+        bpm_layout = QHBoxLayout()
         bpm_label = QLabel("BPM:")
         self.bpm = 120
         self.bpm_spin = QSpinBox()
         self.bpm_spin.setRange(40, 300)
-        self.bpm_spin.setValue(self.bpm)
+        self.bpm_spin.setValue(self.bpm)  # Default BPM
+        bpm_layout.addWidget(bpm_label)
+        bpm_layout.addWidget(self.bpm_spin)
 
         self.track_progress = QProgressBar()
 
-        self.record_btn = QPushButton("Record")
-        self.record_btn.clicked.connect(self.record)
+        # Control buttons with ASCII icons
+        controls_layout = QHBoxLayout()
 
-        self.record_loop_btn = QPushButton("Record & Loop")
-        self.record_loop_btn.clicked.connect(self.record_and_loop)
-
-        self.play_btn = QPushButton("Play")
+        self.play_btn = QPushButton("▶")  # ASCII for Play
+        self.play_btn.setToolTip("Play")
         self.play_btn.clicked.connect(self.play)
+        # self.play_btn.clicked.connect(self.play_queue)
 
-        self.stop_btn = QPushButton("Stop")
+        self.stop_btn = QPushButton("■")  # ASCII for Stop
+        self.stop_btn.setToolTip("Stop")
         self.stop_btn.clicked.connect(self.stop)
 
+        self.record_loop_btn = QPushButton("●")  # ASCII for Record
+        self.record_loop_btn.setToolTip("Record & Loop")
+        # TODO: rework record or record and loop func
+        self.record_loop_btn.clicked.connect(self.record)
+        # self.record_loop_btn.clicked.connect(self.record_and_loop)
+
+
+        self.overdub_btn = QPushButton("⟳")  # ASCII for Overdub
+        self.overdub_btn.setToolTip("Overdub")
+        self.overdub_btn.clicked.connect(self.overdub)
+
+        # Add buttons to the horizontal layout
+        controls_layout.addWidget(self.play_btn)
+        controls_layout.addWidget(self.stop_btn)
+        controls_layout.addWidget(self.record_loop_btn)
+        controls_layout.addWidget(self.overdub_btn)
+
+        # Additional buttons
         self.save_btn = QPushButton("Save")
         self.save_btn.clicked.connect(self.save)
-
-        self.overdub_btn = QPushButton("Overdub")
-        self.overdub_btn.clicked.connect(self.overdub)
 
         self.panic_btn = QPushButton("Panic (All Notes Off)")
         self.panic_btn.clicked.connect(self.panic)
@@ -139,21 +167,88 @@ class MidiLooperPlayerApp(QWidget):
         self.looper_led = QLabel("●")
         self.set_led(self.looper_led, "gray")
 
-        layout.addWidget(bpm_label)
+
+        # Sample button grid
+        self.grid_layout = QGridLayout()
+        self.update_button_grid()
+
+        # Input field to adjust the number of buttons
+        self.num_buttons_input = QLineEdit()
+        self.num_buttons_input.setPlaceholderText("Enter number of buttons")
+        self.num_buttons_input.returnPressed.connect(self.adjust_button_grid)
+
+        # Add widgets to the main layout
+        layout.addWidget(self.led)
+        layout.addLayout(bpm_layout)
         layout.addWidget(self.bpm_spin)
         layout.addWidget(self.track_progress)
-        layout.addWidget(self.record_btn)
+        layout.addLayout(controls_layout)  
+        # layout.addWidget(self.record_btn)
         layout.addWidget(self.record_loop_btn)
-        layout.addWidget(self.play_btn)
-        layout.addWidget(self.stop_btn)
         layout.addWidget(self.save_btn)
-        layout.addWidget(self.overdub_btn)
         layout.addWidget(self.panic_btn)
         layout.addWidget(self.looper_channel_spin)
         layout.addWidget(self.looper_led)
-        layout.addWidget(self.status)
+        layout.addWidget(self.status)# Add the controls row
+        layout.addLayout(self.grid_layout)
+        layout.addWidget(self.num_buttons_input)
 
         self.looper_view.setLayout(layout)
+
+    def update_button_grid(self):
+        """Update the grid of buttons based on the number of buttons."""
+        if self.button_grid:
+            # Clear existing buttons
+            for i in reversed(range(self.grid_layout.count())):
+                widget = self.grid_layout.itemAt(i).widget()
+                if widget:
+                    widget.deleteLater()
+
+        self.button_grid = []
+        for i in range(self.num_buttons):
+            # Calculate the note name for the button
+            note_number = 60 + i  # Start from MIDI note 60 (C4)
+            note_name = midi_note_to_name(note_number)
+
+            # Create a button with the note name
+            button = QPushButton(note_name)
+            button.clicked.connect(lambda _, b=i: self.assign_sample_to_button(b))
+            self.grid_layout.addWidget(button, i // 4, i % 4)  # Arrange in a 4-column grid
+            self.button_grid.append(button)
+
+    def adjust_button_grid(self):
+        """Adjust the number of buttons in the grid."""
+        try:
+            self.num_buttons = int(self.num_buttons_input.text())
+            self.update_button_grid()
+        except ValueError:
+            self.set_status("Invalid number of buttons", "red")
+
+    def assign_wav_to_button(self, button_index, wav_path):
+        """Assign a .wav file to a button."""
+        try:
+            wave_obj = sa.WWaveObject.from_wave_file(wav_path)
+            self.wav_cache[button_index] = wave_obj
+            self.set_status(f"Assigned {wav_path} to Button {button_index + 1}", "green")
+        except Exception as e:
+            self.set_status(f"Failed to load .wav: {e}", "red")
+
+    def assign_sample_to_button(self, button_index):
+        """Open a file dialog to assign a .wav file to a button."""
+        wav_path, _ = QFileDialog.getOpenFileName(self, "Select WAV File", "", "WAV files (*.wav)")
+        if wav_path:
+            self.assign_wav_to_button(button_index, wav_path)
+            # Update the button text to indicate a sample is assigned
+            note_number = 60 + button_index  # Start from MIDI note 60 (C4)
+            note_name = midi_note_to_name(note_number)
+            self.button_grid[button_index].setText(f"{note_name} (Sample Assigned)")
+
+    def play_assigned_wav(self, button_index):
+        """Play the .wav file assigned to a button."""
+        if button_index in self.wav_cache:
+            self.wav_cache[button_index].play()
+        else:
+            self.set_status(f"No .wav assigned to Button {button_index + 1}", "red")
 
     def setup_file_browser_view(self):
         layout = QHBoxLayout()  # Change to QHBoxLayout to place widgets side by side
@@ -241,8 +336,18 @@ class MidiLooperPlayerApp(QWidget):
         self.set_status("Pre-counting...", "gray")
         self.play()
 
+    def play_pre_count(self):
+        beat_interval = 60 / self.bpm
+        for _ in range(4):  # 4 beat count-in
+            # QSound.play("/usr/share/sounds/freedesktop/stereo/complete.oga")  # adjust path for your system
+            # update status led with the count
+            self.set_status(f"{_+1}", "gray")
+            time.sleep(beat_interval)
+
     def _record_thread(self):
+        self.play_pre_count()
         start = time.time()
+        self.set_status("Recording...", "red")
         with mido.open_input() as inport:
             while self.is_recording:
                 for msg in inport.iter_pending():
@@ -364,17 +469,38 @@ class MidiLooperPlayerApp(QWidget):
         threading.Thread(target=self._loop_play_midi_file).start()
 
     def _loop_play_midi_file(self):
-        while self.playing_midi_file:
-            start = time.time()
-            for msg in self.midi_player_messages:
-                if not self.playing_midi_file:
-                    return
-                time.sleep(max(0, msg.time - (time.time() - start)))
-                msg.channel = self.player_channel_spin.value()
-                self.outport.send(msg)
-            self.player_progress.setValue(100)
-            time.sleep(0.1)
-            self.player_progress.setValue(0)
+        """Play the loaded MIDI file and update the progress bar."""
+        if not self.midi_player_messages:
+            return
+
+        # Calculate the total duration of the MIDI file in seconds
+        ticks_per_beat = self.midi_player_messages[0].ticks_per_beat if hasattr(self.midi_player_messages[0], 'ticks_per_beat') else 480
+        tempo = bpm2tempo(self.bpm_spin.value())  # Convert BPM to microseconds per beat
+        total_ticks = sum(msg.time for msg in self.midi_player_messages)
+        total_duration = mido.tick2second(total_ticks, ticks_per_beat, tempo)
+
+        start_time = time.time()
+        elapsed_time = 0
+
+        for msg in self.midi_player_messages:
+            if not self.playing_midi_file:
+                break
+
+            # Calculate the time to wait for the next message
+            wait_time = mido.tick2second(msg.time, ticks_per_beat, tempo)
+            time.sleep(wait_time)
+
+            # Send the MIDI message
+            msg.channel = self.player_channel_spin.value()
+            self.outport.send(msg)
+
+            # Update the progress bar
+            elapsed_time = time.time() - start_time
+            progress = int((elapsed_time / total_duration) * 100)
+            self.player_progress.setValue(progress)
+
+        # Reset the progress bar when playback is complete
+        self.player_progress.setValue(0)
 
     def stop_midi_file(self):
         self.playing_midi_file = False
@@ -403,8 +529,39 @@ class MidiLooperPlayerApp(QWidget):
             file_path = url.toLocalFile()
             if file_path.lower().endswith(('.mid', '.midi')):
                 self.load_and_play_midi(file_path)
+    def play_queue(self):
+        if self.midi_queue.count() == 0:
+            self.set_status("No MIDI files in the queue", "red")
+            return
 
-    
+        self.current_queue_index = 0
+        self.play_next_in_queue()
+
+    def play_next_in_queue(self):
+        if self.current_queue_index >= self.midi_queue.count():
+            self.current_queue_index = 0  # Loop back to the first file
+
+        file_path = self.midi_queue.item(self.current_queue_index).text()
+        self.current_queue_index += 1
+
+        self.load_and_play_midi(file_path)
+
+        # Start a thread to monitor when the current file finishes
+        threading.Thread(target=self._monitor_playback).start()
+
+    def _monitor_playback(self):
+        while self.playing_midi_file:
+            time.sleep(0.1)  # Check every 100ms
+
+        # When the current file finishes, play the next one
+        self.play_next_in_queue()
+
+def midi_note_to_name(note_number):
+    """Convert MIDI note number to note name."""
+    note_names = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+    octave = (note_number // 12) - 1
+    note = note_names[note_number % 12]
+    return f"{note}{octave}"
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

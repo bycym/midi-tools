@@ -11,7 +11,6 @@ Install packages
 
 ```shell
 python3 -m pip install -r requirements.txt
-brew install tcl-tk
 ```
 
 to run
