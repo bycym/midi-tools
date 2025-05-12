@@ -429,7 +429,7 @@ class MidiLooperPlayerApp(QWidget):
         self.is_playing = False
         self.is_overdubbing = False
         self.timer.stop()
-        self.panic()
+        # self.panic()
         self.track_progress.setValue(0)
         self.set_led(self.looper_led, "gray")
         self.set_status("Stop", "gray")
